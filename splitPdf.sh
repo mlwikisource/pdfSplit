@@ -1,4 +1,4 @@
-#! /usr/bin/bash
+#! /usr/bin/env bash
 
 # Script to build smaller pdf files from pdf files in a given folder.
 # 
@@ -43,7 +43,7 @@ function dbg ()
 
 function help ()
 {
-	echo "Usage `basename $0` [-d] [-h] -c ContorlFile -f PDF Folder -p Pages per Student -q image quality"
+	echo "Usage `basename $0` [-d] [-h] -c ContorlFile -f PDF Folder -p Pages per Student [-q image quality] -o OutpuFolder -t TempFolder"
 	echo -e "\t -d : Enable debug messages"
 	echo -e "\t -h : Display this help message"
 }
@@ -52,7 +52,7 @@ function createPdfs ()
 {
 	del="$*"
 	log $LINENO  "Converting images to PDFs"
-	pdfPartName=`basename $currentPDF .pdf`
+	pdfPartName=`basename "$currentPDF" .pdf`
 
 	# newName=${schoolCode}_${pdfPartName}_${startPage}_${currentPage}
 	# Set the page numbers in 4 digits, otherwise the ordering will be
@@ -61,7 +61,7 @@ function createPdfs ()
 	newName=${schoolCode}_${pdfPartName}_${pgNo}
 
 	dbg "$LINENO New name [$newName]"
-	convert $del ${imgPDF}/${newName}.pdf
+	convert $del ${imgPDF}/"${newName}".pdf
 	dbg $LINENO  "Deleting [$del]"
 	rm $del
 }
@@ -70,11 +70,38 @@ function splitPdf ()
 {
 	num=$1
 	pdf2Split=`tail -n +${num} pdf.lst | head -1`
+	if [[ -z "$pdf2Split" ]]
+	then
+		# No more PDF files to split, exit
+		log "$LINENO No more PDF files to split, exiting"
+		exit 0
+	fi
 	log "$LINENO  Splitting pdf file [$pdf2Split] into images."
 	dbg $LINENO  splitPdf $num
-	pdfimages -p -j $pdf2Split $imgF/jj
-	currentPDF=$pdf2Split
+	pdfimages -p -j "$pdf2Split" $imgF/jj
 	rm $imgF/*.ppm
+	if [[ ! -z "${imgQlty}" ]]
+	then
+		log $LINENO Image Quality $imgQlty
+		convertImages 
+	else
+		log $LINENO Image Quality Empty
+	fi
+	currentPDF=$pdf2Split
+}
+
+function convertImages ()
+{
+	log "$LINENO Changing the image quality to [${imgQlty}%]"
+	ls ${imgF}/*.jpg > conv.lst 2> /dev/null
+	
+	while read conv
+	do
+		dbg $LINENO  [$conv]
+		convert -quality ${imgQlty} "$conv" ${imgF}/new.jpg
+		# Rename the converted file.
+		mv ${imgF}/new.jpg "$conv"
+	done < conv.lst
 }
 
 function combinePdfs ()
@@ -87,21 +114,23 @@ function combinePdfs ()
 
 	fi
 	log "$LINENO $ucount Combining the PDFs"
-	for i in `ls -1 ${imgPDF}/*.pdf`
+	ls  ${imgPDF}/*.pdf > ls.lst
+	while read i 
 	do
-		log $LINENO File : $i
-	done
+		dbg "$LINENO $i"
+	done <  ls.lst
 
 	pgNo=`printf %04d $currentPage`
+	pdfPartName=`basename "$currentPDF" .pdf`
 	newPDFName=${schoolCode}_${pdfPartName}_${startPage}_${pgNo}
 	log $LINENO new name [$newPDFName]
 
 	if [[ "$ucount" -eq 1 ]]
 	then
 		# Only one PDF file, just move it
-		mv  ${imgPDF}/*.pdf ${outPDF}/${newPDFName}.pdf
+		mv  ${imgPDF}/*.pdf "${outPDF}/${newPDFName}.pdf"
 	else
-		pdfunite ${imgPDF}/*.pdf ${outPDF}/${newPDFName}.pdf
+		pdfunite ${imgPDF}/*.pdf "${outPDF}/${newPDFName}.pdf"
 		rm  ${imgPDF}/*.pdf
 	fi
 
@@ -125,7 +154,7 @@ function getImages ()
 	echo $out
 }
 
-while getopts c:f:p:q:o:hd args
+while getopts c:f:p:q:o:t:hd args
 do
 	case $args in
 	c) ctrlFile="$OPTARG"
@@ -137,6 +166,8 @@ do
 	q) imgQlty="$OPTARG"
 		;;
 	o) outPDF="$OPTARG"
+		;;
+	t) tDir="$OPTARG"
 		;;
 	h) help
 		exit
@@ -163,8 +194,9 @@ fi
 # Control Parameters
 
 # Temp image folder
-imgF="/var/tmp/imgs"
-imgPDF="/var/tmp/pdf"
+imgF="${tDir}/imgs"
+imgPDF="${tDir}/pdf"
+
 
 # Make sure that the temporary directory is cleaned out when interrupted.
 # trap "rm -rf ${imgF}; exit 2" 1 2 3 
@@ -245,6 +277,26 @@ fi
 
 log $LINENO  "Totals schools [$totalSchools], students [${totalStudents}] pages [${totalPages}]"
 log $LINENO  "Control file validation completed."
+
+# Check for the temporary directories
+if [[ -d "$tDir" ]]
+then
+	mkdir ${imgF} ${imgPDF} 2> /dev/null
+fi
+
+for outDirs in ${imgF} ${imgPDF}
+do
+	if [[ ! -d ${outDirs} ]]
+	then
+		err "$LINENO Unable to access temp directory ${outDirs}"
+		errors="Yes"
+	fi
+done
+if [[ "$errors" = "Yes" ]]
+then
+	err "$LINENO Unable to access temp directory"
+	exit 2
+fi
 
 batchSize=10
 pdfSeq=1
